@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run with Sudo",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "/usr/bin/sudo",
+            "args": ["${workspaceFolder}/bin/mydocker", "run", "--rootfs", "/tmp/mydocker-rootfs", "/bin/sh"],
+            "preLaunchTask": "build-mydocker"
+        }
+    ]
+}
