@@ -6,10 +6,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+
+	"github.com/AbhishekGY/mydocker/pkg/cgroups"
 )
 
 // RunContainer will run a command in an isolated environment
-func RunContainer(command string, args []string, rootfs string) error {
+func RunContainer(command string, args []string, rootfs string, cg *cgroups.Cgroup, limits cgroups.ResourceLimits) error {
 	fmt.Printf("Running command in container: %s %v with rootfs: %s\n", command, args, rootfs)
 
 	// Check if rootfs exists
@@ -72,8 +74,29 @@ func RunContainer(command string, args []string, rootfs string) error {
 	cmd.SysProcAttr.Setsid = true
 
 	fmt.Println("DEBUG: Starting re-executed process...")
-	// Run the command (this executes the same program but in the container namespaces)
-	err = cmd.Run()
+	// Start the command (this executes the same program but in the container namespaces)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start container process: %v", err)
+	}
+
+	// Get the child process PID
+	childPID := cmd.Process.Pid
+	fmt.Printf("DEBUG: Container process started with PID %d\n", childPID)
+
+	// Add the process to the cgroup
+	if err := cg.AddProcess(childPID); err != nil {
+		return fmt.Errorf("failed to add process to cgroup: %v", err)
+	}
+	fmt.Printf("Added process %d to cgroup\n", childPID)
+
+	// Apply resource limits to the cgroup
+	if err := cg.SetResourceLimits(limits); err != nil {
+		return fmt.Errorf("failed to set resource limits: %v", err)
+	}
+	fmt.Printf("Applied cgroup limits to PID %d\n", childPID)
+
+	// Wait for the command to complete
+	err = cmd.Wait()
 	fmt.Printf("DEBUG: Re-executed process completed with error: %v\n", err)
 	return err
 }
