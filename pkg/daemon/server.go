@@ -63,15 +63,19 @@ func (d *Daemon) Start() error {
 
 // Stop gracefully stops the daemon
 func (d *Daemon) Stop() error {
-	if srv == nil {
-		return nil
+	fmt.Println("Shutting down daemon...")
+
+	// Stop all running containers first
+	d.stopAllContainers()
+
+	// Then stop the HTTP server
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return srv.server.Shutdown(ctx)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	fmt.Println("Shutting down daemon...")
-	return srv.server.Shutdown(ctx)
+	return nil
 }
 
 // handleContainerCreate handles container creation requests
