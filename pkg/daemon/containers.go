@@ -6,10 +6,11 @@ import (
 
 	"github.com/AbhishekGY/mydocker/pkg/api"
 	"github.com/AbhishekGY/mydocker/pkg/cgroups"
+	"github.com/AbhishekGY/mydocker/pkg/container"
 	"github.com/AbhishekGY/mydocker/pkg/state"
 )
 
-// CreateContainer creates a new container but does not start it yet
+// CreateContainer creates and starts a new container
 func (d *Daemon) CreateContainer(req api.ContainerCreateRequest) (string, error) {
 	// Generate a unique container ID
 	id := d.generateContainerID()
@@ -41,7 +42,136 @@ func (d *Daemon) CreateContainer(req api.ContainerCreateRequest) (string, error)
 	}
 
 	fmt.Printf("Created container %s (status: created)\n", id)
+
+	// Start the container immediately
+	if err := d.StartContainer(id); err != nil {
+		// If start fails, update state to reflect failure
+		containerState.Status = "exited"
+		d.updateContainer(containerState)
+		return "", fmt.Errorf("failed to start container: %v", err)
+	}
+
 	return id, nil
+}
+
+// StartContainer starts a created container
+func (d *Daemon) StartContainer(id string) error {
+	// Get container state
+	containerState, err := d.getContainer(id)
+	if err != nil {
+		return err
+	}
+
+	// Check if container is already running
+	if containerState.Status == "running" {
+		return fmt.Errorf("container is already running")
+	}
+
+	// Create the runner
+	runner, err := container.NewRunner(id, containerState.Command, containerState.Rootfs, containerState.Limits)
+	if err != nil {
+		return fmt.Errorf("failed to create runner: %v", err)
+	}
+
+	// Start the container process
+	if err := runner.Start(); err != nil {
+		// Clean up cgroup on failure
+		runner.Cleanup()
+		return fmt.Errorf("failed to start container process: %v", err)
+	}
+
+	// Update container state
+	containerState.PID = runner.PID()
+	containerState.Status = "running"
+	if err := d.updateContainer(containerState); err != nil {
+		// If we can't save state, kill the container
+		runner.Kill()
+		runner.Cleanup()
+		return fmt.Errorf("failed to update container state: %v", err)
+	}
+
+	// Store runner in daemon
+	d.addRunner(id, runner)
+
+	fmt.Printf("Started container %s with PID %d\n", id, runner.PID())
+
+	// Launch goroutine to monitor container
+	go d.monitorContainer(id, runner)
+
+	return nil
+}
+
+// monitorContainer monitors a running container and updates state when it exits
+func (d *Daemon) monitorContainer(id string, runner *container.Runner) {
+	// Wait for container to exit (blocks until exit)
+	err := runner.Wait()
+
+	fmt.Printf("Container %s exited", id)
+	if err != nil {
+		fmt.Printf(" with error: %v\n", err)
+	} else {
+		fmt.Println()
+	}
+
+	// Get container state
+	containerState, err := d.getContainer(id)
+	if err != nil {
+		fmt.Printf("Error getting container state for %s: %v\n", id, err)
+		return
+	}
+
+	// Update state to exited
+	containerState.Status = "exited"
+	containerState.PID = 0
+	if err := d.updateContainer(containerState); err != nil {
+		fmt.Printf("Error updating container state for %s: %v\n", id, err)
+	}
+
+	// Cleanup cgroup
+	if err := runner.Cleanup(); err != nil {
+		fmt.Printf("Error cleaning up container %s: %v\n", id, err)
+	}
+
+	// Remove runner from daemon
+	d.removeRunner(id)
+}
+
+// StopContainer stops a running container
+func (d *Daemon) StopContainer(id string) error {
+	// Get container state
+	containerState, err := d.getContainer(id)
+	if err != nil {
+		return err
+	}
+
+	// Check if container is running
+	if containerState.Status != "running" {
+		return fmt.Errorf("container is not running (status: %s)", containerState.Status)
+	}
+
+	// Get runner
+	runner, err := d.getRunner(id)
+	if err != nil {
+		return fmt.Errorf("runner not found for container %s", id)
+	}
+
+	// Send SIGTERM
+	fmt.Printf("Sending SIGTERM to container %s (PID %d)\n", id, runner.PID())
+	if err := runner.Stop(); err != nil {
+		return fmt.Errorf("failed to send SIGTERM: %v", err)
+	}
+
+	// Wait with timeout (5 seconds)
+	if err := runner.WaitWithTimeout(5 * time.Second); err != nil {
+		// Still running after timeout, force kill
+		fmt.Printf("Container %s did not stop gracefully, sending SIGKILL\n", id)
+		if err := runner.Kill(); err != nil {
+			return fmt.Errorf("failed to kill container: %v", err)
+		}
+	}
+
+	// The monitorContainer goroutine will handle cleanup and state update
+	return nil
 }
 
 // ListContainers returns information about all containers
@@ -74,15 +204,4 @@ func (d *Daemon) ListContainers() []api.ContainerInfo {
 	}
 
 	return containers
-}
-
-// StopContainer stops a running container
-func (d *Daemon) StopContainer(id string) error {
-	// This is a placeholder implementation for Phase 1
-	_, err := d.getContainer(id)
-	if err != nil {
-		return err
-	}
-
-	return fmt.Errorf("not implemented")
 }

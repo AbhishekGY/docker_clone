@@ -1,6 +1,7 @@
 # Binaries
 bin/mydocker
 bin/mydockerd
+bin/container-init
 
 # State and data directories
 /var/lib/mydocker/
