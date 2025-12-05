@@ -1,0 +1,137 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/AbhishekGY/mydocker/pkg/api"
+)
+
+// httpServer holds the HTTP server instance
+type httpServer struct {
+	server *http.Server
+}
+
+var srv *httpServer
+
+// Start starts the daemon HTTP server
+func (d *Daemon) Start() error {
+	// Remove old socket if it exists
+	if err := os.RemoveAll(d.socketPath); err != nil {
+		return fmt.Errorf("failed to remove old socket: %v", err)
+	}
+
+	// Create Unix socket listener
+	listener, err := net.Listen("unix", d.socketPath)
+	if err != nil {
+		return fmt.Errorf("failed to create Unix socket: %v", err)
+	}
+
+	// Change socket permissions to allow access
+	if err := os.Chmod(d.socketPath, 0666); err != nil {
+		listener.Close()
+		return fmt.Errorf("failed to set socket permissions: %v", err)
+	}
+
+	// Set up HTTP routes
+	mux := http.NewServeMux()
+	mux.HandleFunc("/containers/create", d.handleContainerCreate)
+	mux.HandleFunc("/containers/list", d.handleContainerList)
+	mux.HandleFunc("/containers/stop", d.handleContainerStop)
+
+	// Create HTTP server
+	srv = &httpServer{
+		server: &http.Server{
+			Handler: mux,
+		},
+	}
+
+	fmt.Printf("Daemon listening on %s\n", d.socketPath)
+
+	// Start serving (this blocks)
+	if err := srv.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("server error: %v", err)
+	}
+
+	return nil
+}
+
+// Stop gracefully stops the daemon
+func (d *Daemon) Stop() error {
+	if srv == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	fmt.Println("Shutting down daemon...")
+	return srv.server.Shutdown(ctx)
+}
+
+// handleContainerCreate handles container creation requests
+func (d *Daemon) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req api.ContainerCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	id, err := d.CreateContainer(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create container: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := api.ContainerCreateResponse{ID: id}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleContainerList handles container listing requests
+func (d *Daemon) handleContainerList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	containers := d.ListContainers()
+
+	resp := api.ContainerListResponse{Containers: containers}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleContainerStop handles container stop requests
+func (d *Daemon) handleContainerStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req api.ContainerStopRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	err := d.StopContainer(req.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to stop container: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := api.ContainerStopResponse{Success: true}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}

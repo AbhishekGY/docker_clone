@@ -22,12 +22,17 @@ echo "Using Go executable: $GO_CMD"
 # Create bin directory if it doesn't exist
 mkdir -p bin
 
-# Build the main mydocker binary
-echo "Building mydocker..."
+# Build the mydockerd daemon
+echo "Building mydockerd..."
+$GO_CMD build -o bin/mydockerd cmd/mydockerd/main.go
+
+# Build the mydocker client
+echo "Building mydocker client..."
 $GO_CMD build -o bin/mydocker cmd/mydocker/main.go
 
-echo "Build completed. The mydocker binary is in the bin/ directory."
-echo "You can run: ./bin/mydocker run --rootfs /tmp/mydocker-rootfs /bin/sh"
+echo "Build completed. The binaries are in the bin/ directory."
+echo "Start the daemon: sudo ./bin/mydockerd"
+echo "Then run: ./bin/mydocker run --rootfs /tmp/mydocker-rootfs /bin/sh"
 
 # Ensure rootfs exists
 if [ ! -d "/tmp/mydocker-rootfs" ]; then

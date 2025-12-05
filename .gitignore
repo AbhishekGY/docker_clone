@@ -1,0 +1,19 @@
+# Binaries
+bin/mydocker
+bin/mydockerd
+
+# State and data directories
+/var/lib/mydocker/
+/tmp/mydocker-data/
+
+# Build artifacts
+*.o
+*.a
+*.so
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
