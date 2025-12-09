@@ -11,6 +11,7 @@ bin/container-init
 *.o
 *.a
 *.so
+build
 
 # IDE
 .vscode/
