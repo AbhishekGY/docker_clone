@@ -11,6 +11,7 @@ type ContainerCreateRequest struct {
 	CpuQuota   int64    `json:"cpu_quota"`
 	CpuPeriod  uint64   `json:"cpu_period"`
 	PidsLimit  int64    `json:"pids_limit"`
+	Detach     bool     `json:"detach"`
 }
 
 // ContainerCreateResponse represents the response after creating a container

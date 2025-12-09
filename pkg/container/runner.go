@@ -2,6 +2,7 @@ package container
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/AbhishekGY/mydocker/pkg/cgroups"
 	"github.com/AbhishekGY/mydocker/pkg/namespace"
+	"github.com/creack/pty"
 )
 
 // Runner manages the lifecycle of a running container
@@ -19,10 +21,12 @@ type Runner struct {
 	Rootfs  string
 	Cgroup  *cgroups.Cgroup
 	Cmd     *exec.Cmd
+	Detach  bool
+	PtyFile *os.File // PTY master file (for attached mode)
 }
 
 // NewRunner creates a new container runner and sets up its cgroup
-func NewRunner(id string, command []string, rootfs string, limits cgroups.ResourceLimits) (*Runner, error) {
+func NewRunner(id string, command []string, rootfs string, limits cgroups.ResourceLimits, detach bool) (*Runner, error) {
 	// Validate inputs
 	if len(command) == 0 {
 		return nil, fmt.Errorf("command cannot be empty")
@@ -44,6 +48,7 @@ func NewRunner(id string, command []string, rootfs string, limits cgroups.Resour
 		Command: command,
 		Rootfs:  rootfs,
 		Cgroup:  nil, // No cgroup for now
+		Detach:  detach,
 	}, nil
 }
 
@@ -71,17 +76,27 @@ func (r *Runner) Start() error {
 	// Pass the rootfs path via environment variable
 	r.Cmd.Env = append(os.Environ(), fmt.Sprintf("CONTAINER_ROOTFS=%s", r.Rootfs))
 
-	// Set up stdin/stdout/stderr
-	r.Cmd.Stdin = nil        // Containers run in background, no stdin
-	r.Cmd.Stdout = os.Stdout // For now, log to daemon's stdout
-	r.Cmd.Stderr = os.Stderr // For now, log to daemon's stderr
-
 	// Configure namespaces
 	namespace.PrepareNamespaces(r.Cmd)
 
-	// Start the process in the background
-	if err := r.Cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start container process: %v", err)
+	// Set up stdin/stdout/stderr based on detach mode
+	if r.Detach {
+		// Detached mode: no stdin, log to daemon's stdout/stderr
+		r.Cmd.Stdin = nil
+		r.Cmd.Stdout = os.Stdout
+		r.Cmd.Stderr = os.Stderr
+
+		// Start the process in the background
+		if err := r.Cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start container process: %v", err)
+		}
+	} else {
+		// Attached mode: allocate a PTY
+		ptyFile, err := pty.Start(r.Cmd)
+		if err != nil {
+			return fmt.Errorf("failed to start container with PTY: %v", err)
+		}
+		r.PtyFile = ptyFile
 	}
 
 	// TODO: Cgroup support disabled - skip AddProcess for now
@@ -123,7 +138,38 @@ func (r *Runner) PID() int {
 
 // Cleanup removes the cgroup for this container
 func (r *Runner) Cleanup() error {
+	// Close PTY file if it exists
+	if r.PtyFile != nil {
+		r.PtyFile.Close()
+		r.PtyFile = nil
+	}
 	// TODO: Cgroup cleanup disabled for now
+	return nil
+}
+
+// GetPtyFile returns the PTY file for attached mode
+func (r *Runner) GetPtyFile() *os.File {
+	return r.PtyFile
+}
+
+// CopyIO copies data between the PTY and provided reader/writer
+func (r *Runner) CopyIO(stdin io.Reader, stdout, stderr io.Writer) error {
+	if r.PtyFile == nil {
+		return fmt.Errorf("no PTY available")
+	}
+
+	// Copy stdin to PTY
+	go func() {
+		if stdin != nil {
+			io.Copy(r.PtyFile, stdin)
+		}
+	}()
+
+	// Copy PTY to stdout (stderr goes through stdout in PTY mode)
+	if stdout != nil {
+		io.Copy(stdout, r.PtyFile)
+	}
+
 	return nil
 }
 

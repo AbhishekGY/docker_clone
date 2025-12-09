@@ -49,8 +49,10 @@ func printUsage() {
 	fmt.Println("  --cpu-period MICROS    CPU period in microseconds (default 100000)")
 	fmt.Println("  --pids-limit NUM       Maximum number of PIDs/processes")
 	fmt.Println("  --rootfs PATH          Path to the rootfs directory (required)")
+	fmt.Println("  -d, --detach           Run container in detached mode (background)")
 	fmt.Println("\nExamples:")
-	fmt.Println("  mydocker run --memory 536870912 --rootfs /tmp/mydocker-rootfs /bin/sh")
+	fmt.Println("  mydocker run --rootfs /tmp/mydocker-rootfs /bin/sh")
+	fmt.Println("  mydocker run -d --memory 536870912 --rootfs /tmp/mydocker-rootfs /bin/sleep 300")
 	fmt.Println("  mydocker ps")
 	fmt.Println("  mydocker stop <container-id>")
 }
@@ -67,6 +69,8 @@ func runCommand() {
 	cpuPeriod := runFlags.Uint64("cpu-period", 100000, "CPU period in microseconds")
 	pidsLimit := runFlags.Int64("pids-limit", 0, "Maximum number of PIDs/processes")
 	rootfs := runFlags.String("rootfs", "", "Path to the rootfs directory")
+	detach := runFlags.Bool("d", false, "Run container in detached mode (background)")
+	runFlags.Bool("detach", false, "Run container in detached mode (background)")
 
 	// Parse flags (skip "mydocker" and "run")
 	if err := runFlags.Parse(os.Args[2:]); err != nil {
@@ -102,6 +106,7 @@ func runCommand() {
 		CpuQuota:   *cpuQuota,
 		CpuPeriod:  *cpuPeriod,
 		PidsLimit:  *pidsLimit,
+		Detach:     *detach,
 	}
 
 	// Create container
