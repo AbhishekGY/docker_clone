@@ -11,7 +11,7 @@ import (
 )
 
 // CreateContainer creates and starts a new container
-func (d *Daemon) CreateContainer(req api.ContainerCreateRequest) (string, error) {
+func (d *Daemon) CreateContainer(req api.ContainerCreateRequest) (string, *container.Runner, error) {
 	// Generate a unique container ID
 	id := d.generateContainerID()
 
@@ -38,46 +38,53 @@ func (d *Daemon) CreateContainer(req api.ContainerCreateRequest) (string, error)
 
 	// Add container to daemon state
 	if err := d.addContainer(containerState); err != nil {
-		return "", fmt.Errorf("failed to add container: %v", err)
+		return "", nil, fmt.Errorf("failed to add container: %v", err)
 	}
 
 	fmt.Printf("Created container %s (status: created)\n", id)
 
 	// Start the container immediately
-	if err := d.StartContainer(id); err != nil {
+	runner, err := d.StartContainerWithRunner(id, req.Detach)
+	if err != nil {
 		// If start fails, update state to reflect failure
 		containerState.Status = "exited"
 		d.updateContainer(containerState)
-		return "", fmt.Errorf("failed to start container: %v", err)
+		return "", nil, fmt.Errorf("failed to start container: %v", err)
 	}
 
-	return id, nil
+	return id, runner, nil
 }
 
-// StartContainer starts a created container
+// StartContainer starts a created container (with detach=true by default for backward compatibility)
 func (d *Daemon) StartContainer(id string) error {
+	_, err := d.StartContainerWithRunner(id, true)
+	return err
+}
+
+// StartContainerWithRunner starts a created container and returns the runner
+func (d *Daemon) StartContainerWithRunner(id string, detach bool) (*container.Runner, error) {
 	// Get container state
 	containerState, err := d.getContainer(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Check if container is already running
 	if containerState.Status == "running" {
-		return fmt.Errorf("container is already running")
+		return nil, fmt.Errorf("container is already running")
 	}
 
 	// Create the runner
-	runner, err := container.NewRunner(id, containerState.Command, containerState.Rootfs, containerState.Limits)
+	runner, err := container.NewRunner(id, containerState.Command, containerState.Rootfs, containerState.Limits, detach)
 	if err != nil {
-		return fmt.Errorf("failed to create runner: %v", err)
+		return nil, fmt.Errorf("failed to create runner: %v", err)
 	}
 
 	// Start the container process
 	if err := runner.Start(); err != nil {
 		// Clean up cgroup on failure
 		runner.Cleanup()
-		return fmt.Errorf("failed to start container process: %v", err)
+		return nil, fmt.Errorf("failed to start container process: %v", err)
 	}
 
 	// Update container state
@@ -87,7 +94,7 @@ func (d *Daemon) StartContainer(id string) error {
 		// If we can't save state, kill the container
 		runner.Kill()
 		runner.Cleanup()
-		return fmt.Errorf("failed to update container state: %v", err)
+		return nil, fmt.Errorf("failed to update container state: %v", err)
 	}
 
 	// Store runner in daemon
@@ -98,7 +105,7 @@ func (d *Daemon) StartContainer(id string) error {
 	// Launch goroutine to monitor container
 	go d.monitorContainer(id, runner)
 
-	return nil
+	return runner, nil
 }
 
 // monitorContainer monitors a running container and updates state when it exits

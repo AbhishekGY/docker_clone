@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -91,15 +92,67 @@ func (d *Daemon) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := d.CreateContainer(req)
+	id, runner, err := d.CreateContainer(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create container: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// If detached, just return the container ID
+	if req.Detach {
+		resp := api.ContainerCreateResponse{ID: id}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// For attached mode, hijack the connection and stream I/O
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+
+	conn, bufrw, err := hijacker.Hijack()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to hijack connection: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
+
+	// Send container ID first as a JSON response
 	resp := api.ContainerCreateResponse{ID: id}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respBytes, _ := json.Marshal(resp)
+	fmt.Fprintf(bufrw, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(respBytes), string(respBytes))
+	bufrw.Flush()
+
+	// Now stream I/O with the container's PTY
+	if runner.GetPtyFile() == nil {
+		fmt.Fprintln(bufrw, "Error: No PTY available for attached mode")
+		bufrw.Flush()
+		return
+	}
+
+	// Copy data bidirectionally between connection and PTY
+	done := make(chan error, 2)
+
+	// Copy from connection to PTY (stdin)
+	go func() {
+		_, err := io.Copy(runner.GetPtyFile(), conn)
+		done <- err
+	}()
+
+	// Copy from PTY to connection (stdout/stderr)
+	go func() {
+		_, err := io.Copy(conn, runner.GetPtyFile())
+		done <- err
+	}()
+
+	// Wait for either direction to finish
+	<-done
+
+	// Wait for container to exit
+	runner.Wait()
 }
 
 // handleContainerList handles container listing requests
