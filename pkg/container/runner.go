@@ -36,33 +36,14 @@ func NewRunner(id string, command []string, rootfs string, limits cgroups.Resour
 		return nil, fmt.Errorf("rootfs directory doesn't exist: %s", rootfs)
 	}
 
-	// Create cgroup for this container with all controllers
-	cg, err := cgroups.NewCgroup(id, []cgroups.Controller{
-		cgroups.Cpu,
-		cgroups.Memory,
-		cgroups.Pids,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cgroup: %v", err)
-	}
-
-	// Create the cgroup directories
-	if err := cg.Create(); err != nil {
-		return nil, fmt.Errorf("failed to create cgroup directories: %v", err)
-	}
-
-	// Apply resource limits to the cgroup (but no process yet)
-	if err := cg.SetResourceLimits(limits); err != nil {
-		// Clean up cgroup on failure
-		cg.Delete()
-		return nil, fmt.Errorf("failed to set resource limits: %v", err)
-	}
+	// TODO: Cgroups disabled for now - will implement later
+	// For now, just create the runner without cgroup
 
 	return &Runner{
 		ID:      id,
 		Command: command,
 		Rootfs:  rootfs,
-		Cgroup:  cg,
+		Cgroup:  nil, // No cgroup for now
 	}, nil
 }
 
@@ -91,7 +72,7 @@ func (r *Runner) Start() error {
 	r.Cmd.Env = append(os.Environ(), fmt.Sprintf("CONTAINER_ROOTFS=%s", r.Rootfs))
 
 	// Set up stdin/stdout/stderr
-	r.Cmd.Stdin = nil   // Containers run in background, no stdin
+	r.Cmd.Stdin = nil        // Containers run in background, no stdin
 	r.Cmd.Stdout = os.Stdout // For now, log to daemon's stdout
 	r.Cmd.Stderr = os.Stderr // For now, log to daemon's stderr
 
@@ -103,12 +84,7 @@ func (r *Runner) Start() error {
 		return fmt.Errorf("failed to start container process: %v", err)
 	}
 
-	// Add the process to the cgroup
-	if err := r.Cgroup.AddProcess(r.Cmd.Process.Pid); err != nil {
-		// If we can't add to cgroup, kill the process
-		r.Cmd.Process.Kill()
-		return fmt.Errorf("failed to add process to cgroup: %v", err)
-	}
+	// TODO: Cgroup support disabled - skip AddProcess for now
 
 	return nil
 }
@@ -147,17 +123,7 @@ func (r *Runner) PID() int {
 
 // Cleanup removes the cgroup for this container
 func (r *Runner) Cleanup() error {
-	if r.Cgroup == nil {
-		return nil
-	}
-
-	// Try to delete the cgroup
-	err := r.Cgroup.Delete()
-	if err != nil {
-		// Log the error but don't fail - cgroup might already be cleaned up
-		fmt.Printf("Warning: failed to delete cgroup for container %s: %v\n", r.ID, err)
-	}
-
+	// TODO: Cgroup cleanup disabled for now
 	return nil
 }
 
